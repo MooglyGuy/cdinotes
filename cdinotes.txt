@@ -1,0 +1,538 @@
+#define CDIC_CMD_RESET_MODE2	0x24
+#define CDIC_CMD_ABORT		0x2e
+
+#define SLAVE_CHAN2		(*(uint32_t *)0x310005)
+#define SLAVE_CMD_MUTE		0x82
+#define SLAVE_CMD_UNMUTE	0x83
+
+struct fullAudioState;
+struct audioState;
+struct unkState;
+struct unkState2;
+struct cdicState;
+
+struct audioStateDesc
+{
+	audioState *state;
+	uint16_t unknowns[6];	// Each contains 0000 0030 0000 0000 0004 0000 on entry to 42CC1A in pacpanic
+};
+
+EFE600: struct fullAudioState
+{
+	uint16_t descCount;	// 0x00, Contains 0010 on entry to 42CC1A in pacpanic
+	uint16_t unkPad[7];
+	audioStateDesc *descs;
+	// Contains following state on entry to 42CC1A in pacpanic:
+	// descCount = 0x0010;
+	// unkPad = { 0x0000, 0x0000, 0x0110, 0x0000, 0x0000, 0x0000, 0x0000 };
+	// descs[0] = { 0x00EFBC60, 0000 0030 0000 0000 0004 0000 };
+	// descs[1] = { 0x00EFA940, 0000 0030 0000 0000 0004 0000 };
+	// descs[2] = { 0x00EFA010, 0000 0030 0000 0000 0004 0000 };
+};
+
+EFBC60: struct audioState
+{
+	uint16_t stateId;	// 0x00, Contains 0001 for EFBC60, 0002 for EFA010, 0003 for EFA940
+	uint16_t unk0x02;	// 0x02, Contains 0000 on entry to 42B866 in pacpanic
+	uint16_t unk0x04;	// 0x04, Contains 0000 on entry to 42B866 in pacpanic
+	uint16_t unk0x08;	// 0x08, Contains 0000 on entry to 42B866 in pacpanic
+	uint32_t *ramBufAddr;	// 0x12, Contains 002551F4 on entry to 42B866 in pacpanic
+	uint16_t *unkp0x16;	// 0x16, Contains 00D034DC on entry to 42B60E in pacpanic
+	uint16_t unk0x1a;	// 0x1a, Contains 0012 on entry to 42B866 in pacpanic
+	uint16_t unk0x1c;	// 0x1c, Contains 0000 on entry to 42B866 in pacpanic
+	uint8_t xaType;		// 0x1e, Contains 01 on entry to 42B866 in pacpanic
+	uint32_t unk0x20;	// 0x20, Contains 00000000 on entry to 42B866 in pacpanic
+};
+
+EFCA20: struct unkState
+{
+	uint16_t unk0x08;	// 0x08
+	uint32_t *unkp0x0a;	// 0x0a, Contains 00EFD4E8 on entry to 42CC1A in pacpanic
+	uint16_t unk0x0e;	// 0x0e, Contains 0001 on entry to 42CC1A in pacpanic
+};
+
+EFCD30: struct unkState2
+{
+	uint16_t unk0x1c;	// 0x1c
+};
+
+EFE710: struct cdicState
+{
+	uint32_t *cdicRegs;	// 0x0, Contains 0x00300000
+	uint32_t *unkp0x44;	// 0x44
+	uint8_t unk0x58;	// 0x58
+	uint32_t *unkp0x5e;	// 0x5e
+	uint16_t unk0x62;	// 0x62
+	uint8_t unk0x64;	// 0x64
+	uint8_t unk0x65;	// 0x65
+	uint8_t unk0x86;	// 0x68
+	uint32_t dmaRegAddr;	// 0x86
+	uint16_t savedStatus;	// 0x8a
+	uint16_t unk0x8c;	// 0x8c
+	uint32_t unk0x8e;	// 0x8e
+	uint16_t unk0x94;	// 0x94
+	uint32_t unk0x114;	// 0x114
+	uint32_t *unkp0x128;	// 0x128
+	uint16_t unk0x12e;	// 0x12e
+	uint16_t zBuffer;	// 0x13a, maybe current/expected Z Buffer / AUDCTL value?
+	uint16_t errCode;	// 0x130
+	fullAudioState *aState;	// 0x136, Contains 00EFE600 on entry to 42CD3E in pacpanic
+	uint32_t unk0x140;	// 0x140
+	uint32_t unk0x144;	// 0x144, Contains 00000000 on entry to 42BB2A in pacpanic
+	uint8_t unk0x150;	// 0x150
+	uint8_t unk0x151;	// 0x151
+	uint8_t unk0x152;	// 0x152
+	uint8_t unk0x154;	// 0x154
+	uint16_t unk0x1c4;	// 0x1c4
+};
+
+bool cdicDmaTransfer(uint32_t **ramBuf, uint16_t dmaCtl, uint16_t count, bool toMemory, uint16_t &err); // 42A9C6..42AA36, returns true on error
+{
+	static const uint16_t ERR_CODES[17] =
+	{
+		0x00F6, // Timer run-out
+		0x00F4,
+		0x00F4, // Timing Error
+		0x00F4,
+		0x00F4,
+		0x00F4,
+		0x00F4,
+		0x00F4,
+		0x00F4,
+		0x0066, // Bus Error (memory side)
+		0x0066, // Bus Error (device side)
+		0x00F4,
+		0x00F4,
+		0x00F4,
+		0x00F4,
+		0x00F4,
+		0x00F4,
+		0x00F4  // Software Abort
+	};
+
+	while (DMA_CH0_CSR & DMA_CSR_CA);
+	DMA_CH0_CSR = 0xff;
+	DMA_CH0_MAC = *ramBuf;
+	DMA_CH0_MTC = count >> 1;
+	if (toMemory)
+	{
+		DMA_CH0_OCR = DMA_OCR_D | DMA_OCR_WORD | 0x02;
+		dmaCtl |= 0x8000;
+	}
+	else
+	{
+		DMA_CH0_OCR = DMA_OCR_WORD | 0x02;
+		dmaCtl |= 0xc000;
+	}
+	DMA_CH0_CCR = DMA_CCR_SO;
+	DMACTL = dmaCtl;
+	uint16_t runOut = 1000;
+	while (runOut > 0)
+	{
+		if (DMA_CH0_CSR & DMA_CSR_COC)
+		{
+			if (DMA_CH0_CSR & DMA_CSR_ERR)
+			{
+				err = ERR_CODES[DMA_CH0_CER];
+				return true;
+			}
+			*ramBuf = DMA_CH0_MAC;
+			return false;
+		}
+		runOut--;
+	}
+	err = ERR_CODES[0];
+	return true;
+}
+
+// 42ADFE..42AE0A
+void cdicUnmuteAudio()
+{
+	cdic.unk0x152 = 0xff;
+	SLAVE_CHAN2 = SLAVE_CMD_UNMUTE;
+	return;
+}
+
+// 42B3C0..42B552 // Lots of code...
+{
+	uint16_t err = 0;
+	uint32_t *A3 = cdicState.cdicRegs;
+	cdicUnk42baf0();
+	if (cdicState.unk0x114 != 0 && )
+	if (cdicState.unk0x114 != 0 && cdicState.unk0x8c == 0x0028)
+	{
+		cdicUnk0x42b9ec();
+		cdicState.unk0x114 = 0;
+	}
+	if (cdicState.unk0x18e == 0 || cdicState.unk0x154 == 0)
+	{
+		// 42b404
+		cdicUnk42bb2a();
+		uint16_t tempSR = SR;
+		SR = cdicState.savedStatus; // Enable interrupts
+		if (cdicState.unk0x12e == 1)
+		{
+			SR = tempSR; // Disable interrupts
+			cdicState.unk0x150 = 1;
+			CDIC_ZBUF = 0x0000;
+			cdicState.unk0x152 = 0;
+			SLAVE_CHAN2 = SLAVE_CMD_MUTE;
+			if (CDIC_ACHAN == 0)
+			{
+				tempSR = SR;
+				SR = cdicState.savedStatus; // Enable interrupts
+				cdicRAM[0x280a] |= 0x00ff;
+				CDIC_ZBUF = 0x0800;
+				for (volatile int i = 3; i >= 0; i--);
+				uint16_t zBuf = CDIC_ZBUF;
+				SR = tempSR;
+				CDIC_ZBUF = 0x0000;
+				if (!BIT(zBuf, 0))
+				{
+					if (cdicUnk42b6d4())
+					{
+						// 42b4fc
+					}
+					else
+					{
+						cdicUnk42b554();
+					}
+				}
+				else
+				{
+					// 42b478
+				}
+			}
+			else
+			{
+				// 42b4a4
+			}
+		}
+		else
+		{
+			// 42b516
+		}
+	}
+	else
+	{
+		while (cdicState.unk0x18e != 0 && cdicState.unk0x154 != 0)
+		{
+			// 42b3f4
+			if (!cdicUnk42b9aa(1, err))
+			{
+				continue;
+			}
+		}	
+	}
+}
+
+// 42B554..42B5B2
+void cdicUnk42b554(uint32_t *unkp /*A5*/, uint16_t &err); // A5 contains EFD4E8 on entry
+{
+	cdicState.zBuffer = 0x2800;
+	if (cdicSendAdpcmBuffer())
+		return;
+
+	cdicState.zBuffer = 0x3200;
+	uint32_t *A0 = (uint32_t *)0x42b73c;
+	cdicState.unkp0x128 = (uint32_t *)0x42b73c;
+	cdicUnmuteAudio();
+	
+	volatile zbuf_clear = CDIC_ZBUF;
+	volatile abuf_clear = CDIC_ABUF;
+	CDIC_ZBUF = 0x2800;
+	
+	cdicState.unk0x12e = 0x0020;
+	cdicState.unk0x140 = *(uint32_t *)(A6 + 0x54); // TODO: Figure out A6 default
+	if (cdicAdvanceRamBuffer())
+	{
+		cdicRAM[0x320a] = 0xff;
+		cdicUnk42b60e();
+		err = 0;
+		return;
+	}
+	if (cdicSendAdpcmBuffer(err))
+	{
+		return;
+	}
+	cdicAdvanceRamBuffer();
+	err = 0;
+}
+
+// 42B5B4..42B60C
+void cdicUnk42b5b4()
+{
+	switch (cdicState.unk0x154)
+	{
+	case 0:
+		cdicState.unk0x154 = 1;
+		break;
+	case 2:
+		if (BIT(CDIC_DBUF, 15))
+		{
+			cdicState.unk0x154++;
+			break;
+		}
+		CDIC_ACHAN = 0x0000;
+		CDIC_CMDREG = CDIC_CMD_ABORT;
+		CDIC_DBUF |= 0x8000;
+		break;
+	case 3:
+		break;
+	default:
+		cdicUnk42b554(cdicState.unkp0x5e);
+		break;
+	}
+	cdicState.unk0x154--;
+}
+
+void cdicUnk42b60e() // 42B60E..42B670, unknown purpose, seems to interact with DVC memory space
+{
+	cdicState.unk0x65 = 0x00;
+	cdicState.unk0x64 = 0x00;
+	cdicState.unk0x68 = 0x00;
+	cdicState.unk0x12e = 0x0002;
+	if (audioState.unkp0x16 == nullptr)
+	{
+		cdicState.unk0x62 = 0x0000;
+		return;
+	}
+	audioState.unkp0x16[0] = 0x0001;
+	const uint16_t initialUnkValue = audioState.unkp0x16[1]; // 0x0101 on initial entry in pacpanic
+	if (cdicState.errCode)
+	{
+		audioState.unkp0x16[1] = cdicState.errCode; // What?!
+		cdicState.errCode = 0x0000;
+		audioState.unkp0x16[0] = 0x8001;
+	}
+	if (cdicState.unk0x62 != 0)
+	{
+		cdicState.unk0x62 = 0x0000;
+		if (initialUnkValue != 0)
+		{
+			// trap 0, 0x0008
+			// pea $80.w
+			// jmp 4080f8
+			// TODO
+		}
+	}
+}
+
+bool cdicAdvanceRamBuffer() // 42B672..42B6C4, returns true/false (Z/NZ) to indicate done/not-done(?)
+{
+	audioState.ramBufAddr += 0x900;
+	if (audioState.unk0x20 == 0)
+	{
+		if (audioState.unk0x1c < audioState.unk0x1a)
+			return false;
+		audioState.ramBufAddr = 0;
+		return true;
+	}
+	else if (audioState.unk0x1c <= audioState.unk0x04)
+	{
+		return false;
+	}
+	else if (audioState.unk0x08 == 0)
+	{
+		audioState.ramBufAddr = 0;
+		return true;
+	}
+	audioState.unk0x08--;
+	if (audioState.unk0x08 == 0)
+	{
+		audioState.ramBufAddr = 0;
+		return true;
+	}
+	audioState.unk0x1c = audioState.unk0x02;
+	audioState.ramBufAddr = audioState.unk0x20;
+	return false;
+}
+
+// 42B6D4
+bool cdicUnk42b6d4()
+{
+	if (cdicUnk42cc1a())
+		return true;
+	
+}
+
+bool cdicSendAdpcmBuffer() // 42B80E..42B822, returns false/true on success/fail.
+{
+	uint16_t err = 0;
+	if (cdicSendAdpcmBuffer(err))
+	{
+		cdic.errCode = err;
+		cdic.unk0x12e = 0x0040;
+		return true;
+	}
+	return false;
+}
+
+bool cdicSendAdpcmBuffer(uint16_t &err) // 42B824..42B84E, returns false/true on success/fail
+{
+	cdicRAM[cdicState.zBuffer + 0x000a] = audioState.xaType;
+	return cdicDmaTransfer(audioState.ramBufAddr, cdicState.zBuffer + 0x000c, 0x900, DMA_TO_DEVICE, err);
+}
+
+bool cdicUnk42b850() // 42B850..42B864, returns false/true on success/fail
+{
+	uint16_t err = 0;
+	if (cdicUnk42b866(err))
+	{
+		cdic.errCode = err;
+		cdic.unk0x12e = 0x0040;
+		return true;
+	}
+	return false;
+}
+
+bool cdicUnk42b866(uint16_t &err) // 42B866..42B8F6, returns false/true on success/fail
+{
+	cdicRAM[cdicState.zBuffer + 0x000a] = audioState.xaType;
+	if (BIT(ABUF, 15))
+	{
+		
+	}
+	if (!BIT(ABUF, 15))
+	{
+		// 8de
+	}
+	else if (!BIT(AUDCTL, 0))
+	{
+		// 8d4
+	}
+	if (BIT(ABUF, 15) && BIT(AUDCTL, 0))
+	{
+		cdicRAM[0x280a] = audioState.xaType;
+		if (cdicDmaTransfer(audioState.ramBufAddr, cdicState.zBuffer + 0x000c, 0x900, DMA_TO_RAM))
+			return true;
+		AUDCTL = 0x2800;
+		cdicState.zBuffer = 0x3200;
+		const bool done = cdicAdvanceRamBuffer();
+		if (done)
+		{
+			unk42b60e();
+			return false;
+		}
+		else
+		{
+			if (cdicSendAdpcmBuffer())
+				return;
+			err = 0;
+			return cdicAdvanceRamBuffer();
+		}
+	}
+	else if (
+	{
+		
+	}
+}
+
+// unkTrap0x000A
+bool unkTrap0x000A(uint32_t unkD0)
+{
+}
+
+// 42B9AA..42B9EA: ???
+bool cdicUnk42b9aa(uint32_t unkD0, uint16_t &err)
+{
+	if (unkTrap0x000A(unkD0))
+		return true;
+	err = 0;
+	if (BIT(unkState2.unk0x1c, 0))
+		return true;
+	err = 0x00f6;
+	// 42b9c2
+}
+
+// 42B9EC..42BA66: ???
+bool cdicUnk0x42b9ec()
+{
+	if (cdicUnk0x42ad62())
+	{
+		return true;
+	}
+	cdicState.unk0x8e = 0x0042BA4E;
+	CDIC_CMDREG = CDIC_CMD_RESET_MODE2;
+	volatile dbuf_clear = CDIC_DBUF;
+	volatile xbuf_clear = CDIC_XBUF;
+	cdcicState.unk0x94 = 8;
+	cdicState.unk0x1c4 = unkState.unk0x08;
+	if (cdicUnk42b9aa(0x80000500))
+	{
+		return true;
+	}
+	CDIC_DBUF = 0;
+	cdicState.unk0x94 = 4;
+	return false;
+}
+
+// 42BAF0..42BB26: ???
+void cdicUnk42baf0()
+{
+	while (cdicState.unk0x151)
+	{
+		// 42bb1e
+		// moveq #$1, D0
+		// trap #$0
+		// dc.w $000a
+		if (above is true)
+		{
+			return;
+		}
+	}
+
+	cdicState.unk0x151 = 1;
+	if (cdicState.unk0x58 != 3)
+	{
+		return;
+	}
+	cdicUnk42a020(cdicState.unkp0x44);
+	cdicState.unk0x114 = 5;
+}
+
+// 42BB2A..42BB78: ???
+void cdicUnk42bb2a()
+{
+	if (cdicState.unk0x144 == 0)
+		return;
+	
+	if (!cdicUnk42ae0c())
+	{
+		cdicState.unk0x144 = 0;
+		return;
+	}
+
+	// 42bb3c
+}
+
+// 42CC1A..42CC34
+void cdicUnk42cc1a()
+{
+	uint??_t *a0 = ;
+	cdicUnk42cd28(cdicState.unk0x136);
+	// ...
+}
+
+// 42CD28..42CD3C
+bool cdicUnk42cd28()
+{
+	cdicUnk42cd3e()
+}
+
+// 42CD3E..42CD90, returns true on error, error code in D1
+bool cdicUnk42cd3e(void *A0, uint32_t **A1, uint16_t D2, uint16_t &err)
+{
+	if (D2 == 0 || D2 > *(uint16_t *)A0)
+	{
+		err = 0x0604;
+		return true;
+	}
+	*A1 = ((uint32_t *)A0) + D2 * 4;
+	if (*A1 == 0)
+	{
+		err = 0x0604;
+		return true;
+	}
+	return false;
+}
